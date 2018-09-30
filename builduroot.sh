@@ -105,4 +105,4 @@ build_linux &&
 cd $dir
 mk_initrd
 
-#qemu-system-x86_64 -kernel /tmp/build/boot/vmlinuz -initrd /tmp/build/initrd.cpio
+#qemu-system-x86_64 -kernel boot/vmlinuz -initrd initrd.cpio
