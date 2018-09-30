@@ -1,0 +1,5 @@
+boot
+busybox
+linux-stable
+initrd.cpio
+out
