@@ -4,4 +4,4 @@ initrd.cpio:
 	./builduroot.sh
 
 clean:
-	rm -Rf busybox linux-stable out out.cpio
+	rm -Rf boot busybox linux-stable out initrd.cpio
