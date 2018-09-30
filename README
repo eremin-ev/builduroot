@@ -1,0 +1,96 @@
+Сборка тестового окружения
+
+  Для сборки тестового окружения необходимо выполнить сценарий build-uroot.sh.  
+  Сценарий сделает клоны репозиториев BusyBox (git://busybox.net/busybox.git) и 
+  Linux-stable (https://github.com/eremin-ev/linux-stable.git), переключает 
+  Linux на LTS-ветку 4.14.y, выполнит сборку исполняемых файлов и initramfs.  
+  BusyBox собирается статически.  Linux собирается без поддержки модулей ядра (и 
+  с очень ограниченным конфигом в целях экономии времени на сборку).  Изменения 
+  внесены в ветку 4.14.y поверх коммита 2cc4d365363b (tag: v4.14.72).
+
+Режим работы TrivSM
+
+  Trivsm инициализируется в процессе загрузки ядра.  Собрать TrivSM модулем или  
+  полностью выгрузить без перезагрузки машины невозможно.  После загрузки ядра с 
+  параметрами CONFIG_SECURITY_TRIVSM=y и CONFIG_DEFAULT_SECURITY_TRIVSM=y  
+  модуль Trivsm инициализирован, но по умолчанию выключен.
+
+	root@/# cat /proc/sys/kernel/trivsm_enabled
+	0
+ 
+  Для включения необходимо воспользоваться переменной sysctl 
+  kernel.trivsm_enabled, либо напрямую записать «1» в спец-файл:
+
+	root@/# echo 1 > /proc/sys/kernel/trivsm_enabled
+
+Тестирование
+
+  На соседних терминалах выполняется вход под пользователем user1 и отправляется 
+  сигнал KILL соседнему процессу.  Случай нечётных pid:
+
+	tty1				tty2
+	----------------------		----------------------
+	root@/root# su - user1          root@/root# su - user1
+	user1@~$ echo $$		user1@~$ echo $$
+	29				33
+	user1@~$ kill -KILL 33		user1@~$ Killed
+
+Случай нечётный-чётный pid:
+
+	tty1				tty2
+	----------------------		----------------------
+	user1@~$ echo $$		user1@~$ echo $$
+	29				36
+	user1@~$ kill -USR1 36          user1@~$ Killed
+
+  В обоих случаях сигнал был отправлен, т.к. trivsm выключен.  После этого 
+  trivsm переведён в режим выполнения проверки:
+
+	root@/# cat /proc/sys/kernel/trivsm_enabled
+	1
+
+  Случай нечётный-чётный pid:
+
+	tty1				tty2
+	----------------------		----------------------
+	user1@~$ echo $$		user1@~$ echo $$	
+	29				42
+	user1@~$ kill -KILL 42		user1@~$
+	ash: can't kill pid 42		user1@~$
+
+  Случай нечётный-нечётный pid:
+
+	user1@~$ echo $$		user1@~$ echo $$
+	user1@~$ 29			53
+	user1@~$ kill -USR1 53          user1@~$ Killed
+
+  Случай чётный-чётный pid:
+
+	user1@~$ echo $$		user1@~$ echo $$
+	74				76
+	user1@~$ Killed			user1@~$ kill -KILL 74
+
+  Случай чётный-нечётный pid:
+
+	user1@~$ echo $$		user1@~$ echo $$
+	83				76
+	user1@~$			user1@~$ kill -KILL 83
+	user1@~$			ash: can't kill pid 83
+
+  Случай отправки сигнала самому себе ($$ == 76, т.е. чётный-чётный):
+
+	user1@~$ kill -KILL $$
+	Killed
+
+  Во всех случаях допускалась отправка сигнала только процессу с идентификатором 
+  одинаковой чётности.
+
+Контроль входных параметров
+
+  Специальный файл допускает запись только целых значений в диапазоне [0,1].  
+  При попытке записать другое значение будет возвращена ошибка EINVAL.
+
+	root@/# echo 2 > /proc/sys/kernel/trivsm_enabled
+	ash: write error: Invalid argument
+
+vim:fo+=aw:tw=80:
