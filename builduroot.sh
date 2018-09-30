@@ -23,7 +23,7 @@ build_busybox()
 	git clone $src_busybox &&
 	cd busybox/ &&
 	git checkout 1_29_3 &&
-	cp -v config/busybox-1.29.3 .config &&
+	cp -v ../config/busybox-1.29.3 .config &&
 	make -j8
 	#INSTALL_PATH=out make install
 }
@@ -34,7 +34,7 @@ build_linux()
 	git clone $src_linux &&
 	cd linux-stable/ &&
 	git checkout linux-4.14.y &&
-	cp -v config/linux-4.14.72.config .config &&
+	cp -v ../config/linux-4.14.72.config .config &&
 	make -j8 &&
 	INSTALL_PATH=../boot make install
 }
@@ -95,7 +95,7 @@ mk_initrd()
 	cd out/
 	find . | cpio -o -H newc > ../initrd.cpio
 	cd ..
-	ls -sh out.cpio
+	ls -sh initrd.cpio
 }
 
 dir=$PWD
