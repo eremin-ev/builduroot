@@ -3,3 +3,5 @@ busybox
 linux-stable
 initrd.cpio
 out
+linux
+disk.img
