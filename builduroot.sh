@@ -167,8 +167,7 @@ mk_lib()
 
 fix_libs()
 {
-	bin="$1"
-	find "$1" -type f -perm /111 -exec ldd '{}' ';' \
+	find $@ -type f -a '(' -name '*.so' -o -perm /111 ')' -exec ldd '{}' ';' \
 			| awk '$2 == "=>" {print($3)} $2 != "=>" {print($1)}' \
 			| sort | uniq | while read l; do
 		if [[ -n "$l" ]]; then
@@ -181,11 +180,18 @@ fix_libs()
 	done
 }
 
-mk_passwd()
+mk_etc_passwd()
 {
 	echo 'root:x:0:0::/root:/bin/ash'
 	echo 'user1:x:1000:1000:Linux User,,,:/home/user1:/bin/ash'
 	echo 'user2:x:1001:1000:Linux User,,,:/home/user2:/bin/ash'
+}
+
+mk_etc_shadow()
+{
+	echo 'root::18551::::::'
+	echo 'user1::18551::::::'
+	echo 'user2::18551::::::'
 }
 
 mk_group()
@@ -206,8 +212,8 @@ mk_profile()
 
 mk_disk()
 {
-	dd if=/dev/zero of=disk.img bs=512 count=$[2*50*1000]
-	mkfs.ext4 disk.img
+	dd if=/dev/zero of=hda.img bs=4096 count=$((8*8196))
+	mkfs.ext4 hda.img
 }
 
 mk_sh_history()
@@ -215,18 +221,63 @@ mk_sh_history()
 	echo "evmctl ima_sign -a sha256 --key /root/privkey_ima.pem system/init"
 	echo "evmctl ima_sign --key /root/privkey_ima.pem system/init"
 	echo "echo 'appraise func=BPRM_CHECK appraise_type=imasig' > /sys/kernel/security/integrity/ima/policy"
+	echo "export PATH='/bin:/sbin'"
+}
+
+mk_pam_other()
+{
+	echo "#%PAM-1.0"
+	echo "auth	required	pam_deny.so"
+	echo "auth	required	pam_warn.so"
+	echo "account	required	pam_deny.so"
+	echo "account	required	pam_warn.so"
+	echo "password	required	pam_deny.so"
+	echo "password	required	pam_warn.so"
+	echo "session	required	pam_deny.so"
+	echo "session	required	pam_warn.so"
+}
+
+mk_pam_login()
+{
+	cat <<-EOF
+	#%PAM-1.0
+
+	auth       required                    pam_faillock.so      preauth
+	# Optionally use requisite above if you do not want to prompt for the password
+	# on locked accounts.
+	auth       [success=2 default=ignore]  pam_unix.so          try_first_pass nullok
+	auth       [default=die]               pam_faillock.so      authfail
+	auth       optional                    pam_permit.so
+	auth       required                    pam_env.so
+	auth       required                    pam_faillock.so      authsucc
+	# If you drop the above call to pam_faillock.so the lock will be done also
+	# on non-consecutive authentication failures.
+
+	account    required                    pam_unix.so
+	account    optional                    pam_permit.so
+	account    required                    pam_time.so
+
+	password   required                    pam_unix.so          try_first_pass nullok shadow
+	password   optional                    pam_permit.so
+
+	session    required                    pam_limits.so
+	session    required                    pam_unix.so
+	session    optional                    pam_permit.so
+	EOF
 }
 
 mk_initrd()
 {
 	mk_lib
-	mkdir -vp out/{bin,dev,etc/keys,home/{user1,user2},root,proc,sys,mnt}
+	mkdir -vp out/{bin,dev,etc/{keys,pam.d},home/{user1,user2},root,proc,sys,mnt,tmp}
+	mkdir -vp out/var/log
 	if [[ -d "extra" ]]; then
 		cp -vR extra/ out/root
 	fi
 	ln -sv bin out/sbin
 	#cp -v busybox/busybox_unstripped out/bin/busybox
 	cp -v busybox/busybox out/bin/busybox
+
 	for b in evmctl keyctl getfattr setfattr strace; do
 		p=$(type -p $b)
 		if [[ -n "$p" ]]; then
@@ -237,18 +288,32 @@ mk_initrd()
 		fi
 	done
 
-	fix_libs "out/bin"
+	mkdir -vp out/{etc,usr/lib}/security
+	for l in pam_env pam_faillock pam_limits \
+			pam_permit pam_unix pam_deny pam_warn pam_time; do
+		cp -v /lib/security/"${l}.so" out/usr/lib/security
+	done
+
+	for l in libnss_files.so.2; do
+		cp -v /usr/lib/"${l}" out/usr/lib/
+	done
+
+	fix_libs "out/bin" "out/usr/lib"
 
 	cp -v keys/ima/x509_ima.der out/etc/keys/
 	cp -v keys/ima/privkey_ima.pem out/root/
 	strip -d out/bin/busybox
 	ln -sv ../bin/busybox out/sbin/init
 	ln -sv bin/busybox out/init
-	mk_sh_history > out/.ash_history
+	mk_sh_history > out/root/.ash_history
+	ln -sv root/.ash_history out/.ash_history
 	mk_inittab > out/etc/inittab
-	mk_passwd > out/etc/passwd
+	mk_etc_passwd > out/etc/passwd
+	mk_etc_shadow > out/etc/shadow
 	mk_group > out/etc/group
 	mk_profile > out/etc/profile
+	mk_pam_other > out/etc/pam.d/other
+	mk_pam_login > out/etc/pam.d/login
 	cd out/
 	find . | cpio -o -H newc > ../initrd.cpio
 	cd ..
@@ -264,15 +329,18 @@ fi
 echo "t: '$t'"
 
 b_busybox="0"
-b_initrd="0"
 b_key="0"
 b_linux="0"
+b_disk="0"
+b_initrd="0"
 
 for tt in $t; do
 	case "$tt" in
 		"busybox")
-			echo "busybox"
 			b_busybox="1"
+			;;
+		"disk")
+			b_disk="1"
 			;;
 		"initrd")
 			b_initrd="1"
@@ -285,17 +353,19 @@ for tt in $t; do
 			;;
 		"all")
 			b_busybox="1"
-			b_initrd="1"
 			b_key="1"
 			b_linux="1"
+			b_disk="1"
+			b_initrd="1"
 			;;
 	esac
 done
 
 echo "b_busybox $b_busybox"
-echo "b_initrd $b_initrd"
 echo "b_key $b_key"
 echo "b_linux $b_linux"
+echo "b_disk $b_disk"
+echo "b_initrd $b_initrd"
 
 dir=$PWD
 echo "Using ${dir}"
@@ -313,12 +383,12 @@ if [[ ${b_linux} == "1" ]]; then
 	linux_install || exit
 fi
 cd $dir
-#if [[ ${b_disk} == "1" ]]; then
-#	mk_disk
-#fi
+if [[ ${b_disk} == "1" ]]; then
+	mk_disk
+fi
 cd $dir
 if [[ ${b_initrd} == "1" ]]; then
 	mk_initrd
 fi
 
-#qemu-system-x86_64 -kernel boot/vmlinuz -initrd initrd.cpio -append "vga=792"
+#qemu-system-x86_64 -drive file=hda.img,if=none,format=raw,id=vd0 -device virtio-blk-pci,drive=vd0 -smp cpus=2 -kernel boot/vmlinuz -initrd initrd.cpio -append "vga=792 init_on_free=1" -display sdl
