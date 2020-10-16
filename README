@@ -9,6 +9,19 @@
   внесены в ветку linux-4.14.y репозитория linux-stable поверх коммита 
   2cc4d365363b (tag: v4.14.72).
 
+Run in QEMU
+
+	qemu-system-x86_64 -drive file=hda.img,if=none,format=raw,id=vd0 \
+		-device virtio-blk-pci,drive=vd0 \
+		-smp cpus=2 -display sdl \
+		-kernel boot/vmlinuz -initrd initrd.cpio \
+		-append "vga=792 init_on_free=1"
+
+Run in chroot
+
+	sudo chroot out/ /bin/busybox --install -s /bin
+	sudo chroot out/ /bin/ash -i
+
 Режим работы TrivSM
 
   Trivsm инициализируется в процессе загрузки ядра.  Собрать TrivSM модулем или  
