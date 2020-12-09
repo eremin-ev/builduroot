@@ -22,6 +22,14 @@ Run in chroot
 	sudo chroot out/ /bin/busybox --install -s /bin
 	sudo chroot out/ /bin/ash -i
 
+Non standard shared objects
+
+  Set LD_LIBRARY_PATH if you want to pick up shared objects from a non-standard 
+  directory, e.g. if you have a new version of PAM installed under prefix 
+  /tmp/m/pam:
+
+	LD_LIBRARY_PATH=/tmp/m/pam/lib ./builduroot.sh
+
 Режим работы TrivSM
 
   Trivsm инициализируется в процессе загрузки ядра.  Собрать TrivSM модулем или  

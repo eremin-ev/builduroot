@@ -15,6 +15,15 @@ mk_inittab()
 	echo '::sysinit:mount -t sysfs sys /sys'
 	echo '::sysinit:mount -t securityfs securityfs /sys/kernel/security'
 	echo '::sysinit:mount /dev/vda /mnt'
+	echo '::sysinit:chmod +s /sbin/unix_chkpwd'
+	echo '::sysinit:chmod +s /sbin/unix_update'
+	echo '::sysinit:chmod -r /etc/shadow'
+
+	# temporary pam debug
+	echo '::sysinit:touch /var/run/pam-debug.log'
+	echo '::sysinit:chown user1 /var/run/pam-debug.log'
+	echo '::sysinit:ln -sv /sbin /tmp/m/pam/sbin'
+
 	echo 'tty1::respawn:-/bin/ash'
 	echo 'tty2::respawn:-/bin/ash'
 	echo 'tty3::respawn:-/bin/ash'
@@ -147,8 +156,8 @@ linux_build()
 	fi &&
 	cd linux/ &&
 	git checkout v5.8 &&
-	cp -v ${src}/config/linux-5.8.config .config &&
-	cp -v ../keys/ca/local-ca.pem certs/signing_key.pem &&
+	cp -vf ${src}/config/linux-5.8.config .config &&
+	cp -vf ../keys/ca/local-ca.pem certs/signing_key.pem &&
 	make -j8
 }
 
@@ -168,10 +177,11 @@ mk_lib()
 fix_libs()
 {
 	find $@ -type f -a '(' -name '*.so' -o -perm /111 ')' -exec ldd '{}' ';' \
-			| awk '$2 == "=>" {print($3)} $2 != "=>" {print($1)}' \
+			| awk '$2 == "=>" {print($3)}' \
 			| sort | uniq | while read l; do
 		if [[ -n "$l" ]]; then
-			p=${l%/*}
+			#p=${l%/*}
+			p="usr/lib"
 			if [[ -n "$p" && "$p" != "$l" ]]; then
 				mkdir -vp out/$p
 				cp -vu $l out/$p
@@ -198,6 +208,12 @@ mk_group()
 {
 	echo 'root:x:0:root'
 	echo 'users:x:1000:user1,user2'
+}
+
+mk_busybox_conf()
+{
+	echo '[SUID]'
+	echo 'passwd = ssx root.root'
 }
 
 mk_profile()
@@ -241,6 +257,25 @@ mk_pam_login()
 {
 	cat <<-EOF
 	#%PAM-1.0
+	auth		required	pam_unix.so try_first_pass nullok
+	#auth		required	pam_deny.so
+	account		required	pam_unix.so
+	#account	optional	pam_permit.so
+	#account	required	pam_time.so
+
+	password	required	pam_unix.so try_first_pass nullok shadow
+	#password	optional	pam_permit.so
+
+	#session	required	pam_limits.so
+	session		required	pam_unix.so
+	#session	optional	pam_permit.so
+	EOF
+}
+
+mk_pam_login2()
+{
+	cat <<-EOF
+	#%PAM-1.0
 
 	auth       required                    pam_faillock.so      preauth
 	# Optionally use requisite above if you do not want to prompt for the password
@@ -266,19 +301,31 @@ mk_pam_login()
 	EOF
 }
 
+mk_pam_passwd()
+{
+	cat <<-EOF
+	#%PAM-1.0
+	password   required   pam_unix.so sha512 shadow nullok
+	EOF
+}
+
 mk_initrd()
 {
+	rm -Rf out
 	mk_lib
 	mkdir -vp out/{bin,dev,etc/{keys,pam.d},home/{user1,user2},root,proc,sys,mnt,tmp}
-	mkdir -vp out/var/log
+	mkdir -vp out/var/{log,run}
 	if [[ -d "extra" ]]; then
 		cp -vR extra/ out/root
 	fi
 	ln -sv bin out/sbin
+	ln -sv ../bin out/usr/bin
+	ln -sv ../sbin out/usr/sbin
 	#cp -v busybox/busybox_unstripped out/bin/busybox
 	cp -v busybox/busybox out/bin/busybox
 
-	for b in evmctl keyctl getfattr setfattr strace; do
+	for b in evmctl keyctl getfattr setfattr strace \
+			passwd unix_chkpwd unix_update; do
 		p=$(type -p $b)
 		if [[ -n "$p" ]]; then
 			cp -v "$p" out/bin
@@ -288,17 +335,29 @@ mk_initrd()
 		fi
 	done
 
+	pam_dir="/lib/security"
+	if [[ -n "${LD_LIBRARY_PATH}" ]]; then
+		echo "Searching PAM modules in ${LD_LIBRARY_PATH}..."
+		u="${LD_LIBRARY_PATH}/security/pam_unix.so"
+		if [[ -f "${u}" ]]; then
+			echo "Ok found '$u'"
+			pam_dir="${LD_LIBRARY_PATH}/security"
+		fi
+	fi
+
 	mkdir -vp out/{etc,usr/lib}/security
 	for l in pam_env pam_faillock pam_limits \
 			pam_permit pam_unix pam_deny pam_warn pam_time; do
-		cp -v /lib/security/"${l}.so" out/usr/lib/security
+		#cp -v "${pam_dir}/${l}.so" out/usr/lib/security
+		mkdir -vp out/${pam_dir}
+		cp -v "${pam_dir}/${l}.so" out/${pam_dir}
 	done
 
 	for l in libnss_files.so.2; do
 		cp -v /usr/lib/"${l}" out/usr/lib/
 	done
 
-	fix_libs "out/bin" "out/usr/lib"
+	fix_libs "out/bin" "out/usr/lib" "${pam_dir}"
 
 	cp -v keys/ima/x509_ima.der out/etc/keys/
 	cp -v keys/ima/privkey_ima.pem out/root/
@@ -311,11 +370,15 @@ mk_initrd()
 	mk_etc_passwd > out/etc/passwd
 	mk_etc_shadow > out/etc/shadow
 	mk_group > out/etc/group
+	mk_busybox_conf > out/etc/busybox.conf
 	mk_profile > out/etc/profile
 	mk_pam_other > out/etc/pam.d/other
 	mk_pam_login > out/etc/pam.d/login
+	mk_pam_passwd > out/etc/pam.d/passwd
+
+	chmod +s out/bin/busybox
 	cd out/
-	find . | cpio -o -H newc > ../initrd.cpio
+	find . | fakeroot cpio -o -H newc > ../initrd.cpio
 	cd ..
 	ls -sh initrd.cpio
 }
